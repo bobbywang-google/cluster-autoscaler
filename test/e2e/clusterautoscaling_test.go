@@ -34,10 +34,11 @@ import (
 )
 
 func TestClusterAutoscaling(t *testing.T) {
+	t.Parallel()
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "fake-pod",
-			Namespace: "default",
+			Name: "fake-pod",
 			Labels: map[string]string{
 				"app": "fake-pod",
 			},
@@ -74,6 +75,9 @@ func TestClusterAutoscaling(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+
+			// Use the namespace created for the test environment
+			pod.Namespace = cfg.Namespace()
 
 			// Create the pending pod
 			err = client.Resources().Create(ctx, pod)
@@ -134,6 +138,7 @@ func TestClusterAutoscaling(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Delete the pod
+			pod.Namespace = cfg.Namespace()
 			_ = client.Resources().Delete(ctx, pod)
 			return ctx
 		}).

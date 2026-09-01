@@ -93,6 +93,7 @@ e2e-install-ca: image-kwok
 		--set tolerations[0].key=node-role.kubernetes.io/control-plane \
 		--set tolerations[0].operator=Exists \
 		--set tolerations[0].effect=NoSchedule \
+		--set extraArgs.enable-csi-node-aware-scheduling=false
 
 .PHONY: e2e-teardown
 e2e-teardown:
