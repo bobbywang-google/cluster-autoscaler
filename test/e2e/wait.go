@@ -20,6 +20,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -91,5 +92,72 @@ func WaitForNodesReady(ctx context.Context, client klient.Client, nodeGroup stri
 			}
 		}
 		return readyCount >= expectedCount, nil
+	}, wait.WithTimeout(timeout), wait.WithContext(ctx))
+}
+
+// WaitForNodeCountConsistently waits for duration while asserting that the node count remains expectedCount.
+func WaitForNodeCountConsistently(ctx context.Context, client klient.Client, nodeGroup string, expectedCount int, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			count, err := CountNodeGroupNodes(ctx, client, nodeGroup)
+			if err != nil {
+				return err
+			}
+			if count != expectedCount {
+				return fmt.Errorf("expected node count %d, got %d", expectedCount, count)
+			}
+			return nil
+		case <-ticker.C:
+			count, err := CountNodeGroupNodes(ctx, client, nodeGroup)
+			if err != nil {
+				return err
+			}
+			if count != expectedCount {
+				return fmt.Errorf("node count deviated: expected %d, got %d", expectedCount, count)
+			}
+		}
+	}
+}
+
+// WaitForPodsWithLabelScheduled waits until at least expectedCount pods matching the label are assigned to a node.
+func WaitForPodsWithLabelScheduled(ctx context.Context, client klient.Client, namespace, labelKey, labelVal string, expectedCount int, timeout time.Duration) error {
+	return wait.For(func(ctx context.Context) (done bool, err error) {
+		podList := &corev1.PodList{}
+		err = client.Resources(namespace).List(ctx, podList)
+		if err != nil {
+			return false, err
+		}
+		scheduledCount := 0
+		for _, pod := range podList.Items {
+			if pod.Labels[labelKey] == labelVal && pod.Spec.NodeName != "" {
+				scheduledCount++
+			}
+		}
+		return scheduledCount >= expectedCount, nil
+	}, wait.WithTimeout(timeout), wait.WithContext(ctx))
+}
+
+// WaitForPodEvent waits until an event with the given reason for the pod appears in the namespace.
+func WaitForPodEvent(ctx context.Context, client klient.Client, namespace, podName, reason string, timeout time.Duration) error {
+	return wait.For(func(ctx context.Context) (done bool, err error) {
+		events := &corev1.EventList{}
+		err = client.Resources(namespace).List(ctx, events)
+		if err != nil {
+			return false, err
+		}
+		for _, event := range events.Items {
+			if event.InvolvedObject.Name == podName && event.Reason == reason {
+				return true, nil
+			}
+		}
+		return false, nil
 	}, wait.WithTimeout(timeout), wait.WithContext(ctx))
 }

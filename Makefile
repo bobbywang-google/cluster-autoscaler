@@ -71,7 +71,7 @@ format:
 
 .PHONY: run-e2e
 run-e2e: e2e-kwok-cluster e2e-install-ca
-	@go test -tags e2e -v ./test/e2e/... -args -v=4
+	@go test -tags e2e -timeout=30m -v ./test/e2e/... -args -v=4
 	@$(MAKE) e2e-teardown
 
 E2E_CLUSTER_NAME ?= ca-e2e-kwok
@@ -96,7 +96,8 @@ e2e-install-ca: image-kwok
 		--set extraArgs.scale-down-unneeded-time=0s \
 		--set extraArgs.scale-down-delay-after-add=0s \
 		--set extraArgs.unremovable-node-recheck-timeout=0s \
-		--set extraArgs.enable-csi-node-aware-scheduling=false
+		--set extraArgs.enable-csi-node-aware-scheduling=false \
+		--set extraArgs.bypassed-scheduler-names=non-existing-bypassed-scheduler
 
 .PHONY: e2e-teardown
 e2e-teardown:
