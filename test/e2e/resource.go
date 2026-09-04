@@ -122,3 +122,19 @@ func CountNodeGroupNodes(ctx context.Context, client klient.Client, nodeGroup st
 	}
 	return count, nil
 }
+
+// DeletePodsWithLabel deletes all pods in namespace matching the given label key and value, and waits for deletion.
+func DeletePodsWithLabel(ctx context.Context, client klient.Client, namespace, labelKey, labelVal string) error {
+	podList := &corev1.PodList{}
+	err := client.Resources(namespace).List(ctx, podList)
+	if err != nil {
+		return err
+	}
+	for _, pod := range podList.Items {
+		if pod.Labels[labelKey] == labelVal {
+			p := pod
+			_ = client.Resources().Delete(ctx, &p)
+		}
+	}
+	return nil
+}
