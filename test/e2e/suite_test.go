@@ -36,6 +36,7 @@ import (
 
 var (
 	testEnv env.Environment
+	testCfg = KwokTestConfig()
 )
 
 func TestMain(m *testing.M) {
@@ -47,6 +48,7 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		log.Fatalf("error loading config: %v", err)
 	}
+
 	testEnv, err = env.NewWithContext(ctx, cfg)
 	if err != nil {
 		log.Fatalf("error creating test environment: %v", err)
@@ -63,7 +65,7 @@ func TestMain(m *testing.M) {
 		if err != nil {
 			return ctx, err
 		}
-		if err := CleanUpNodeGroup(ctx, client, defaultNodeGroup); err != nil {
+		if err := CleanUpNodeGroup(ctx, client, testCfg.NodeGroup); err != nil {
 			return ctx, err
 		}
 		return ctx, nil

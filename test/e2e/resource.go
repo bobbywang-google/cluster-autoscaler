@@ -28,15 +28,21 @@ import (
 	"sigs.k8s.io/e2e-framework/klient"
 )
 
-const (
-	kwokTaintKey      = "kwok-provider"
-	nodeGroupLabelKey = "kwok-nodegroup"
-	defaultNodeGroup  = "kind-worker"
-)
-
-// NewTestPod creates a test pod configuration targeted at kind-worker.
+// NewTestPod creates a baseline test pod requesting 5% of a single node's available CPU
+// and 2% of a single node's available memory (~600m CPU, ~655Mi memory on KWOK).
 func NewTestPod(name, namespace string) *corev1.Pod {
-	return NewTestPodWithResources(name, namespace, "500m", "500Mi")
+	return NewTestPodWithResourceFraction(name, namespace, 0.05, 0.02)
+}
+
+// NewTestPodWithResourceFraction creates a test pod requesting the specified fractions
+// (0.0 < fraction <= 1.0) of a single node's available CPU (NodeCPU) and memory (NodeMemory).
+func NewTestPodWithResourceFraction(name, namespace string, cpuFraction, memFraction float64) *corev1.Pod {
+	return NewTestPodWithResources(
+		name,
+		namespace,
+		testCfg.CalculateCPURequest(cpuFraction),
+		testCfg.CalculateMemoryRequest(memFraction),
+	)
 }
 
 // NewTestPodWithResources creates a test pod configuration with custom CPU and memory requests.
@@ -63,28 +69,25 @@ func NewTestPodWithResources(name, namespace, cpu, memory string) *corev1.Pod {
 				},
 			},
 			NodeSelector: map[string]string{
-				nodeGroupLabelKey: defaultNodeGroup,
+				testCfg.NodeGroupLabelKey: testCfg.NodeGroup,
 			},
-			Tolerations: []corev1.Toleration{
-				{
-					Key:      kwokTaintKey,
-					Operator: corev1.TolerationOpExists,
-					Effect:   corev1.TaintEffectNoSchedule,
-				},
-			},
+			Tolerations: testCfg.Tolerations,
 		},
 	}
 }
 
-// CleanUpNodeGroup deletes all fake nodes for the given nodeGroup and waits until count is 0.
+// CleanUpNodeGroup deletes all fake nodes for the given nodeGroup on KWOK and waits until count is 0.
 func CleanUpNodeGroup(ctx context.Context, client klient.Client, nodeGroup string) error {
+	if testCfg.Provider != ProviderKWOK {
+		return WaitForNodeCount(ctx, client, nodeGroup, 0, testCfg.ScaleDownTimeout)
+	}
 	nodeList := &corev1.NodeList{}
 	err := client.Resources().List(ctx, nodeList)
 	if err != nil {
 		return err
 	}
 	for _, node := range nodeList.Items {
-		if node.Labels[nodeGroupLabelKey] == nodeGroup {
+		if node.Labels[testCfg.NodeGroupLabelKey] == nodeGroup {
 			n := node
 			_ = client.Resources().Delete(ctx, &n)
 		}
@@ -93,18 +96,22 @@ func CleanUpNodeGroup(ctx context.Context, client klient.Client, nodeGroup strin
 }
 
 // TeardownPodAndNodeGroup deletes the test pods, waits for them to be deleted,
-// waits for Cluster Autoscaler to scale down the node naturally (to keep CA state synchronized),
-// and performs forced node cleanup if CA didn't scale down in time.
+// and waits for Cluster Autoscaler to scale down the node group.
 func TeardownPodAndNodeGroup(ctx context.Context, client klient.Client, pods []*corev1.Pod, nodeGroup string) {
 	for _, pod := range pods {
 		if pod != nil {
 			_ = client.Resources().Delete(ctx, pod)
 		}
 	}
-	_ = WaitForPodsDeleted(ctx, client, pods, podDeletionTimeout)
-	// Allow CA to scale down the empty node naturally
-	_ = WaitForNodeCount(ctx, client, nodeGroup, 0, 45*time.Second)
-	_ = CleanUpNodeGroup(ctx, client, nodeGroup)
+	_ = WaitForPodsDeleted(ctx, client, pods, testCfg.PodDeletionTimeout)
+	if testCfg.Provider == ProviderKWOK {
+		// Allow CA to scale down the empty node naturally, then force-clean any leftover fake nodes.
+		_ = WaitForNodeCount(ctx, client, nodeGroup, 0, 45*time.Second)
+		_ = CleanUpNodeGroup(ctx, client, nodeGroup)
+	} else {
+		// For non-KWOK cloud providers, wait for CA to scale down naturally using the provider-configured timeout.
+		_ = WaitForNodeCount(ctx, client, nodeGroup, 0, testCfg.ScaleDownTimeout)
+	}
 }
 
 // CountNodeGroupNodes returns the number of nodes currently matching the nodeGroup.
@@ -116,7 +123,7 @@ func CountNodeGroupNodes(ctx context.Context, client klient.Client, nodeGroup st
 	}
 	count := 0
 	for _, node := range nodeList.Items {
-		if node.Labels[nodeGroupLabelKey] == nodeGroup {
+		if node.Labels[testCfg.NodeGroupLabelKey] == nodeGroup {
 			count++
 		}
 	}

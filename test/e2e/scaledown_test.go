@@ -43,13 +43,13 @@ func TestScaleDownUnneededNode(t *testing.T) {
 				t.Fatalf("failed to create pod: %v", err)
 			}
 
-			err = WaitForPodScheduled(ctx, client, pod, podSchedulingTimeout)
+			err = WaitForPodScheduled(ctx, client, pod, testCfg.PodSchedulingTimeout)
 			if err != nil {
 				t.Fatalf("pod not scheduled: %v", err)
 			}
 
 			// Wait for node count to increase to 1 and be Ready
-			err = WaitForNodesReady(ctx, client, defaultNodeGroup, 1, nodeReadyTimeout)
+			err = WaitForNodesReady(ctx, client, testCfg.NodeGroup, 1, testCfg.NodeReadyTimeout)
 			if err != nil {
 				t.Fatalf("node did not become ready: %v", err)
 			}
@@ -59,10 +59,10 @@ func TestScaleDownUnneededNode(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to delete pod: %v", err)
 			}
-			_ = WaitForPodDeleted(ctx, client, pod, podDeletionTimeout)
+			_ = WaitForPodDeleted(ctx, client, pod, testCfg.PodDeletionTimeout)
 
 			// Step 3: Wait for scale down to delete the unneeded node back to 0
-			err = WaitForNodeCount(ctx, client, defaultNodeGroup, 0, scaleDownTimeout)
+			err = WaitForNodeCount(ctx, client, testCfg.NodeGroup, 0, testCfg.ScaleDownTimeout)
 			if err != nil {
 				t.Fatalf("node was not scaled down after pod deletion: %v", err)
 			}
@@ -74,7 +74,7 @@ func TestScaleDownUnneededNode(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			TeardownPodAndNodeGroup(ctx, client, []*corev1.Pod{pod}, defaultNodeGroup)
+			TeardownPodAndNodeGroup(ctx, client, []*corev1.Pod{pod}, testCfg.NodeGroup)
 			return ctx
 		}).
 		Feature()

@@ -28,13 +28,6 @@ import (
 	"sigs.k8s.io/e2e-framework/klient/wait"
 )
 
-const (
-	podSchedulingTimeout = 2 * time.Minute
-	podDeletionTimeout   = 2 * time.Minute
-	nodeReadyTimeout     = 2 * time.Minute
-	scaleDownTimeout     = 4 * time.Minute
-)
-
 // WaitForPodsScheduled waits until all specified pods are assigned to nodes.
 func WaitForPodsScheduled(ctx context.Context, client klient.Client, pods []*corev1.Pod, timeout time.Duration) error {
 	return wait.For(func(ctx context.Context) (done bool, err error) {
@@ -117,7 +110,7 @@ func WaitForNodesReady(ctx context.Context, client klient.Client, nodeGroup stri
 		}
 		readyCount := 0
 		for _, node := range nodeList.Items {
-			if node.Labels[nodeGroupLabelKey] == nodeGroup {
+			if node.Labels[testCfg.NodeGroupLabelKey] == nodeGroup {
 				for _, condition := range node.Status.Conditions {
 					if condition.Type == corev1.NodeReady && condition.Status == corev1.ConditionTrue {
 						readyCount++
