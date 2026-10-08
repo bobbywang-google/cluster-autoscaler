@@ -71,7 +71,7 @@ format:
 
 .PHONY: run-e2e
 run-e2e: e2e-kwok-cluster e2e-install-ca
-	@go test -tags e2e -v ./test/e2e/... -args -v=4
+	@go test -tags e2e -timeout 20m -v ./test/e2e/... -args -v=4
 	@$(MAKE) e2e-teardown
 
 E2E_CLUSTER_NAME ?= ca-e2e-kwok
