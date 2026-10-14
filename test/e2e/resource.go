@@ -297,3 +297,11 @@ func NewTestPodWithEmptyDirAndAntiAffinity(name, namespace, labelKey, labelVal s
 	}
 	return pod
 }
+
+// NewTestPodWithScheduler creates a test pod requesting the specified fractions of a single node's
+// available CPU and memory that is meant to be scheduled by the given scheduler.
+func NewTestPodWithScheduler(name, namespace string, cpuFraction, memFraction float64, schedulerName string) *corev1.Pod {
+	pod := NewTestPodWithResourceFraction(name, namespace, cpuFraction, memFraction)
+	pod.Spec.SchedulerName = schedulerName
+	return pod
+}

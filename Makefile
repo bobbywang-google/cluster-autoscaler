@@ -98,7 +98,8 @@ e2e-install-ca: image-kwok
 		--set extraArgs.unremovable-node-recheck-timeout=0s \
 		--set extraArgs.enable-csi-node-aware-scheduling=false \
 		--set extraArgs.capacity-buffer-controller-enabled=true \
-		--set extraArgs.capacity-buffer-pod-injection-enabled=true
+		--set extraArgs.capacity-buffer-pod-injection-enabled=true \
+		--set extraArgs.bypassed-scheduler-names=non-existing-bypassed-scheduler
 
 .PHONY: e2e-teardown
 e2e-teardown:

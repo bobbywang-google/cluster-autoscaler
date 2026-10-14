@@ -379,3 +379,328 @@ func TestScaleUpEmptyDirVolume(t *testing.T) {
 
 	testEnv.Test(t, feature)
 }
+
+func TestScaleUpExpendablePodCreated(t *testing.T) {
+	ns := testEnv.EnvConf().Namespace()
+
+	// Pod with expendable priority (below --expendable-pods-priority-cutoff), which CA must ignore
+	pod := NewTestPodWithPriority("expendable-pod", ns, expendablePriorityClassName)
+
+	feature := features.New("Scale Up When Expendable Pod Is Created").
+		Assess("do not scale up when expendable pod is created", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			client, err := cfg.NewClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = EnsurePriorityClasses(ctx, client)
+			if err != nil {
+				t.Fatalf("failed to ensure priority classes: %v", err)
+			}
+
+			err = client.Resources().Create(ctx, pod)
+			if err != nil {
+				t.Fatalf("failed to create expendable pod: %v", err)
+			}
+
+			err = WaitForNodeCountConsistently(ctx, client, testCfg.NodeGroup, 0, testCfg.NoScaleUpWindow)
+			if err != nil {
+				t.Fatalf("cluster scaled up for expendable pod: %v", err)
+			}
+
+			return ctx
+		}).
+		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			client, err := cfg.NewClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+			TeardownPodAndNodeGroup(ctx, client, []*corev1.Pod{pod}, testCfg.NodeGroup)
+			DeletePriorityClasses(ctx, client)
+			return ctx
+		}).
+		Feature()
+
+	testEnv.Test(t, feature)
+}
+
+func TestScaleUpNonExpendablePodCreated(t *testing.T) {
+	ns := testEnv.EnvConf().Namespace()
+
+	// Pod with non-expendable (high) priority
+	pod := NewTestPodWithPriority("non-expendable-pod", ns, highPriorityClassName)
+
+	feature := features.New("Scale Up When Non Expendable Pod Is Created").
+		Assess("scale up when non expendable pod is created", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			client, err := cfg.NewClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = EnsurePriorityClasses(ctx, client)
+			if err != nil {
+				t.Fatalf("failed to ensure priority classes: %v", err)
+			}
+
+			err = client.Resources().Create(ctx, pod)
+			if err != nil {
+				t.Fatalf("failed to create non-expendable pod: %v", err)
+			}
+
+			err = WaitForNodesReady(ctx, client, testCfg.NodeGroup, 1, testCfg.NodeReadyTimeout)
+			if err != nil {
+				t.Fatalf("cluster did not scale up to 1 node: %v", err)
+			}
+
+			err = WaitForPodScheduled(ctx, client, pod, testCfg.PodSchedulingTimeout)
+			if err != nil {
+				t.Fatalf("non-expendable pod was not scheduled: %v", err)
+			}
+
+			return ctx
+		}).
+		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			client, err := cfg.NewClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+			TeardownPodAndNodeGroup(ctx, client, []*corev1.Pod{pod}, testCfg.NodeGroup)
+			DeletePriorityClasses(ctx, client)
+			return ctx
+		}).
+		Feature()
+
+	testEnv.Test(t, feature)
+}
+
+func TestScaleUpExpendablePodPreempted(t *testing.T) {
+	ns := testEnv.EnvConf().Namespace()
+
+	// Regular pod that brings up the single node used by this test
+	basePod := NewTestPod("preemption-base-pod", ns)
+
+	// Expendable pod (70% CPU) managed by a ReplicaSet, so it is recreated after being preempted
+	expendableRS := NewTestReplicaSet("expendable-rs", ns, 1, 0.70, 0.02, "app", "expendable-rs")
+	expendableRS.Spec.Template.Spec.PriorityClassName = expendablePriorityClassName
+
+	// High priority pod (70% CPU) that cannot fit next to the expendable pod, so it preempts it
+	highPriorityPod := NewTestPodWithResourceFraction("preempting-high-priority-pod", ns, 0.70, 0.02)
+	highPriorityPod.Spec.PriorityClassName = highPriorityClassName
+
+	feature := features.New("Scale Up When Expendable Pod Is Preempted").
+		Assess("do not scale up when expendable pod is preempted", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			client, err := cfg.NewClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = EnsurePriorityClasses(ctx, client)
+			if err != nil {
+				t.Fatalf("failed to ensure priority classes: %v", err)
+			}
+
+			// Bring up 1 node with the base pod
+			err = client.Resources().Create(ctx, basePod)
+			if err != nil {
+				t.Fatalf("failed to create base pod: %v", err)
+			}
+
+			err = WaitForNodesReady(ctx, client, testCfg.NodeGroup, 1, testCfg.NodeReadyTimeout)
+			if err != nil {
+				t.Fatalf("cluster did not scale up to 1 node: %v", err)
+			}
+
+			err = WaitForPodScheduled(ctx, client, basePod, testCfg.PodSchedulingTimeout)
+			if err != nil {
+				t.Fatalf("base pod was not scheduled: %v", err)
+			}
+
+			// Run the expendable pod on the existing node
+			err = client.Resources().Create(ctx, expendableRS)
+			if err != nil {
+				t.Fatalf("failed to create expendable ReplicaSet: %v", err)
+			}
+
+			err = WaitForPodsWithLabelScheduled(ctx, client, ns, "app", "expendable-rs", 1, testCfg.PodSchedulingTimeout)
+			if err != nil {
+				t.Fatalf("expendable pod was not scheduled: %v", err)
+			}
+
+			// The high priority pod preempts the expendable pod and takes its place on the node
+			err = client.Resources().Create(ctx, highPriorityPod)
+			if err != nil {
+				t.Fatalf("failed to create high priority pod: %v", err)
+			}
+
+			err = WaitForPodScheduled(ctx, client, highPriorityPod, testCfg.PodSchedulingTimeout)
+			if err != nil {
+				t.Fatalf("high priority pod was not scheduled: %v", err)
+			}
+
+			// The recreated expendable pod stays pending, but CA must not scale up for it
+			err = WaitForNodeCountConsistently(ctx, client, testCfg.NodeGroup, 1, testCfg.NoScaleUpWindow)
+			if err != nil {
+				t.Fatalf("cluster scaled up for preempted expendable pod: %v", err)
+			}
+
+			return ctx
+		}).
+		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			client, err := cfg.NewClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = client.Resources().Delete(ctx, expendableRS)
+			_ = DeletePodsWithLabel(ctx, client, ns, "app", "expendable-rs")
+			TeardownPodAndNodeGroup(ctx, client, []*corev1.Pod{basePod, highPriorityPod}, testCfg.NodeGroup)
+			DeletePriorityClasses(ctx, client)
+			return ctx
+		}).
+		Feature()
+
+	testEnv.Test(t, feature)
+}
+
+func TestScaleUpUnprocessedPodUnschedulable(t *testing.T) {
+	ns := testEnv.EnvConf().Namespace()
+
+	// 2 pods (70% memory each) using a scheduler that CA bypasses. No scheduler will ever process them,
+	// so CA has to decide on its own that they need 2 new nodes.
+	pod1 := NewTestPodWithScheduler("unprocessed-unschedulable-pod-1", ns, 0.05, 0.70, testCfg.BypassedSchedulerName)
+	pod2 := NewTestPodWithScheduler("unprocessed-unschedulable-pod-2", ns, 0.05, 0.70, testCfg.BypassedSchedulerName)
+	pods := []*corev1.Pod{pod1, pod2}
+
+	feature := features.New("Scale Up When Unprocessed Pod Is Unschedulable").
+		Assess("scale up when unprocessed pod is created and is going to be unschedulable", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			client, err := cfg.NewClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for _, pod := range pods {
+				err = client.Resources().Create(ctx, pod)
+				if err != nil {
+					t.Fatalf("failed to create pod %s: %v", pod.Name, err)
+				}
+			}
+
+			err = WaitForNodesReady(ctx, client, testCfg.NodeGroup, 2, testCfg.NodeReadyTimeout)
+			if err != nil {
+				t.Fatalf("cluster did not scale up to 2 nodes for unprocessed pods: %v", err)
+			}
+
+			return ctx
+		}).
+		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			client, err := cfg.NewClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+			TeardownPodAndNodeGroup(ctx, client, pods, testCfg.NodeGroup)
+			return ctx
+		}).
+		Feature()
+
+	testEnv.Test(t, feature)
+}
+
+func TestScaleUpUnprocessedPodSchedulable(t *testing.T) {
+	ns := testEnv.EnvConf().Namespace()
+
+	// Regular pod that brings up the single node used by this test
+	basePod := NewTestPod("unprocessed-schedulable-base-pod", ns)
+
+	// Pod (50% memory) using a scheduler that CA bypasses. It fits on the existing node,
+	// so CA must not add a node for it.
+	unprocessedPod := NewTestPodWithScheduler("unprocessed-schedulable-pod", ns, 0.05, 0.50, testCfg.BypassedSchedulerName)
+
+	feature := features.New("Scale Up When Unprocessed Pod Is Schedulable").
+		Assess("do not scale up when unprocessed pod is created and is going to be schedulable", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			client, err := cfg.NewClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = client.Resources().Create(ctx, basePod)
+			if err != nil {
+				t.Fatalf("failed to create base pod: %v", err)
+			}
+
+			err = WaitForNodesReady(ctx, client, testCfg.NodeGroup, 1, testCfg.NodeReadyTimeout)
+			if err != nil {
+				t.Fatalf("cluster did not scale up to 1 node: %v", err)
+			}
+
+			err = WaitForPodScheduled(ctx, client, basePod, testCfg.PodSchedulingTimeout)
+			if err != nil {
+				t.Fatalf("base pod was not scheduled: %v", err)
+			}
+
+			err = client.Resources().Create(ctx, unprocessedPod)
+			if err != nil {
+				t.Fatalf("failed to create unprocessed pod: %v", err)
+			}
+
+			err = WaitForNodeCountConsistently(ctx, client, testCfg.NodeGroup, 1, testCfg.NoScaleUpWindow)
+			if err != nil {
+				t.Fatalf("cluster scaled up for unprocessed pod that fits on the existing node: %v", err)
+			}
+
+			return ctx
+		}).
+		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			client, err := cfg.NewClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+			TeardownPodAndNodeGroup(ctx, client, []*corev1.Pod{basePod, unprocessedPod}, testCfg.NodeGroup)
+			return ctx
+		}).
+		Feature()
+
+	testEnv.Test(t, feature)
+}
+
+func TestScaleUpUnprocessedPodSchedulerNotBypassed(t *testing.T) {
+	ns := testEnv.EnvConf().Namespace()
+
+	// 2 pods (70% memory each) using a scheduler that does not exist and that CA is not configured
+	// to bypass, so CA keeps waiting for a scheduler and must not scale up
+	schedulerName := "non-existent-scheduler-" + ns
+	pod1 := NewTestPodWithScheduler("unprocessed-not-bypassed-pod-1", ns, 0.05, 0.70, schedulerName)
+	pod2 := NewTestPodWithScheduler("unprocessed-not-bypassed-pod-2", ns, 0.05, 0.70, schedulerName)
+	pods := []*corev1.Pod{pod1, pod2}
+
+	feature := features.New("Scale Up When Unprocessed Pod Scheduler Is Not Bypassed").
+		Assess("do not scale up when unprocessed pod is created and scheduler is not specified to be bypassed", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			client, err := cfg.NewClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for _, pod := range pods {
+				err = client.Resources().Create(ctx, pod)
+				if err != nil {
+					t.Fatalf("failed to create pod %s: %v", pod.Name, err)
+				}
+			}
+
+			err = WaitForNodeCountConsistently(ctx, client, testCfg.NodeGroup, 0, testCfg.NoScaleUpWindow)
+			if err != nil {
+				t.Fatalf("cluster scaled up for pods whose scheduler is not bypassed: %v", err)
+			}
+
+			return ctx
+		}).
+		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			client, err := cfg.NewClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+			TeardownPodAndNodeGroup(ctx, client, pods, testCfg.NodeGroup)
+			return ctx
+		}).
+		Feature()
+
+	testEnv.Test(t, feature)
+}

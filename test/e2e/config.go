@@ -54,6 +54,9 @@ type TestConfig struct {
 	// scale-up is expected not to happen. It must be longer than the time CA needs to react
 	// to a pending pod and add a node in this environment.
 	NoScaleUpWindow time.Duration
+	// BypassedSchedulerName is a scheduler name that Cluster Autoscaler is configured to bypass
+	// (--bypassed-scheduler-names), so CA treats pods using it as pending without waiting for a scheduler.
+	BypassedSchedulerName string
 }
 
 // KwokTestConfig returns the TestConfig for running E2E tests against the local Kind + KWOK cluster.
@@ -81,6 +84,8 @@ func KwokTestConfig() *TestConfig {
 		// CA triggers a scale-up within one 10s --scan-interval and KWOK nodes register within
 		// seconds, so an unwanted scale-up would show up well within 30s.
 		NoScaleUpWindow: 30 * time.Second,
+		// Must match --bypassed-scheduler-names in the Makefile e2e-install-ca target.
+		BypassedSchedulerName: "non-existing-bypassed-scheduler",
 	}
 }
 
