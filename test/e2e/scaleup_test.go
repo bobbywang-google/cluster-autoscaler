@@ -173,6 +173,10 @@ func TestScaleUpNoAdditionalScaleUpsDuringProcessing(t *testing.T) {
 				}
 			}
 
+			// The legacy GCE test first waited for the Cluster Autoscaler status ConfigMap to report an
+			// "InProgress" scale-up. On KWOK the scale-up is effectively instant: it completes within a
+			// single CA loop, so an "InProgress" scale-up status is never reported. We are aware of that and
+			// accept it, and check the resulting node count instead.
 			err = WaitForNodesReady(ctx, client, testCfg.NodeGroup, 3, testCfg.NodeReadyTimeout)
 			if err != nil {
 				t.Fatalf("cluster did not scale up to 3 nodes: %v", err)
