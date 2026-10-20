@@ -28,41 +28,31 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/e2e-framework/klient"
-	"sigs.k8s.io/yaml"
 )
 
 // The DRA tests run on the kind-worker-dra node group of the KWOK chart (kwok/charts/templates/configmap.yaml).
-// KWOK nodes have no kubelet, so no DRA driver publishes their devices. Instead, the chart has a static
-// ResourceSlice for kind-worker-dra in the kwok provider templates ConfigMap, and PublishDRAResourceSlices
-// publishes a copy of it for every kind-worker-dra node.
+// KWOK nodes have no kubelet, so no DRA driver publishes their devices. Instead, PublishDRAResourceSlices
+// publishes a ResourceSlice with draDevicesPerNode devices of draDriverName for every kind-worker-dra node.
 const (
 	draNodeGroup       = "kind-worker-dra"
-	draDriverName      = "gpu.example.com" // must match the static ResourceSlice
-	draDevicesPerNode  = 4                 // must match the static ResourceSlice
+	draDriverName      = "gpu.example.com"
+	draDevicesPerNode  = 4
 	draDeviceClassName = "gpu"
 	// draNodeGroupMinSize is the min-count of kind-worker-dra. Cluster Autoscaler keeps this many baseline
 	// nodes (--enforce-node-group-min-size in the Makefile) and builds the node group template from them.
 	draNodeGroupMinSize = 1
-
-	kwokTemplatesConfigMapNamespace = "kube-system"
-	kwokTemplatesConfigMapName      = "kwok-provider-templates"
-	kwokTemplatesConfigMapKey       = "templates"
 )
 
 // PublishDRAResourceSlices publishes the devices of every draNodeGroup node, like the kubelet plugin of a
-// real DRA driver would: a copy of the static ResourceSlice per node. Nodes that already have it are
-// skipped, so tests call it again after Cluster Autoscaler adds nodes.
+// real DRA driver would: one ResourceSlice per node. Nodes that already have it are skipped, so tests
+// call it again after Cluster Autoscaler adds nodes.
 func PublishDRAResourceSlices(ctx context.Context, client klient.Client) error {
-	template, err := loadStaticResourceSlice(ctx, client)
-	if err != nil {
-		return err
-	}
 	nodes, err := listNodeGroupNodes(ctx, client, draNodeGroup)
 	if err != nil {
 		return err
 	}
 	for _, node := range nodes {
-		err = client.Resources().Create(ctx, resourceSliceForNode(template, node))
+		err = client.Resources().Create(ctx, resourceSliceForNode(node))
 		if err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("failed to create ResourceSlice for node %s: %w", node.Name, err)
 		}
@@ -70,50 +60,30 @@ func PublishDRAResourceSlices(ctx context.Context, client klient.Client) error {
 	return nil
 }
 
-// loadStaticResourceSlice returns the static ResourceSlice from the kwok provider templates ConfigMap,
-// a List whose other items are the template Nodes.
-func loadStaticResourceSlice(ctx context.Context, client klient.Client) (*resourceapi.ResourceSlice, error) {
-	cm := &corev1.ConfigMap{}
-	err := client.Resources().Get(ctx, kwokTemplatesConfigMapName, kwokTemplatesConfigMapNamespace, cm)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get ConfigMap %s: %w", kwokTemplatesConfigMapName, err)
+// resourceSliceForNode returns the ResourceSlice with the devices of the given node. It is named after the
+// node, so it can only be created once per node, and owned by the node, so it is deleted together with it.
+func resourceSliceForNode(node corev1.Node) *resourceapi.ResourceSlice {
+	devices := make([]resourceapi.Device, 0, draDevicesPerNode)
+	for i := range draDevicesPerNode {
+		devices = append(devices, resourceapi.Device{Name: fmt.Sprintf("device-%d", i)})
 	}
-	templates := &corev1.List{}
-	err = yaml.Unmarshal([]byte(cm.Data[kwokTemplatesConfigMapKey]), templates)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse ConfigMap %s: %w", kwokTemplatesConfigMapName, err)
-	}
-	for _, item := range templates.Items {
-		slice := &resourceapi.ResourceSlice{}
-		err = yaml.Unmarshal(item.Raw, slice)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse ConfigMap %s: %w", kwokTemplatesConfigMapName, err)
-		}
-		if slice.Kind != "ResourceSlice" {
-			continue
-		}
-		if slice.Spec.Driver != draDriverName || len(slice.Spec.Devices) != draDevicesPerNode {
-			return nil, fmt.Errorf("static ResourceSlice has driver %q and %d devices, want %q and %d",
-				slice.Spec.Driver, len(slice.Spec.Devices), draDriverName, draDevicesPerNode)
-		}
-		return slice, nil
-	}
-	return nil, fmt.Errorf("no ResourceSlice in ConfigMap %s", kwokTemplatesConfigMapName)
-}
-
-// resourceSliceForNode returns a copy of template for the given node. It is named after the node, so it
-// can only be created once per node, and owned by the node, so it is deleted together with it.
-func resourceSliceForNode(template *resourceapi.ResourceSlice, node corev1.Node) *resourceapi.ResourceSlice {
-	slice := template.DeepCopy()
-	slice.ObjectMeta = metav1.ObjectMeta{
-		Name: node.Name + "-" + draDriverName,
-		OwnerReferences: []metav1.OwnerReference{
-			{APIVersion: "v1", Kind: "Node", Name: node.Name, UID: node.UID},
+	return &resourceapi.ResourceSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: node.Name + "-" + draDriverName,
+			OwnerReferences: []metav1.OwnerReference{
+				{APIVersion: "v1", Kind: "Node", Name: node.Name, UID: node.UID},
+			},
+		},
+		Spec: resourceapi.ResourceSliceSpec{
+			Driver:   draDriverName,
+			NodeName: &node.Name,
+			Pool: resourceapi.ResourcePool{
+				Name:               node.Name,
+				ResourceSliceCount: 1,
+			},
+			Devices: devices,
 		},
 	}
-	slice.Spec.NodeName = &node.Name
-	slice.Spec.Pool.Name = node.Name
-	return slice
 }
 
 // listNodeGroupNodes returns the nodes of the given nodeGroup.

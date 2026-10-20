@@ -306,25 +306,6 @@ data:
           operatingSystem: linux
           osImage: Ubuntu 22.04.2 LTS
           systemUUID: 5f3c1af8-a385-4776-85e4-73d7f4252b44
-    # Devices of a kind-worker-dra node. The kwok provider only uses the Node items and ignores this one.
-    # KWOK nodes have no DRA driver, so the E2E tests publish a copy of this ResourceSlice for every
-    # kind-worker-dra node, with spec.nodeName and spec.pool.name set to that node.
-    - apiVersion: resource.k8s.io/v1
-      kind: ResourceSlice
-      metadata:
-        name: kind-worker-dra-gpu.example.com
-      spec:
-        driver: gpu.example.com
-        nodeName: kind-worker-dra
-        pool:
-          name: kind-worker-dra
-          generation: 0
-          resourceSliceCount: 1
-        devices:
-        - name: device-0
-        - name: device-1
-        - name: device-2
-        - name: device-3
     - apiVersion: v1
       kind: Node
       metadata:
