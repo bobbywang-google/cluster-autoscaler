@@ -89,10 +89,7 @@ func TestScaleDownExpendablePodRunning(t *testing.T) {
 	triggerPod := NewTestPod("priority-trigger-pod", ns)
 
 	// Expendable pod with priority < -10 (default expendable-pods-priority-cutoff is -10)
-	expendablePod := NewTestPodWithPriority("expendable-pod", ns, expendablePriorityClassName)
-	expendablePod.Annotations = map[string]string{
-		"cluster-autoscaler.kubernetes.io/safe-to-evict": "true",
-	}
+	expendablePod := NewTestPod("expendable-pod", ns, WithPriorityClass(expendablePriorityClassName), WithSafeToEvict())
 
 	feature := features.New("Scale Down When Expendable Pod Is Running").
 		Assess("scale down node running only expendable pod", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -167,10 +164,7 @@ func TestNotScaleDownNonExpendablePodRunning(t *testing.T) {
 	ns := testEnv.EnvConf().Namespace()
 
 	// Pod with non-expendable (high) priority
-	nonExpendablePod := NewTestPodWithPriority("non-expendable-pod", ns, highPriorityClassName)
-	nonExpendablePod.Annotations = map[string]string{
-		"cluster-autoscaler.kubernetes.io/safe-to-evict": "true",
-	}
+	nonExpendablePod := NewTestPod("non-expendable-pod", ns, WithPriorityClass(highPriorityClassName), WithSafeToEvict())
 
 	feature := features.New("Scale Down When Non Expendable Pod Is Running").
 		Assess("do not scale down node when non expendable pod is running", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {

@@ -110,7 +110,7 @@ func TestScaleUpPendingPodTooLarge(t *testing.T) {
 	ns := testEnv.EnvConf().Namespace()
 
 	// Pod requests 110% of a single node's memory, so it cannot fit on any node in the node group
-	pod := NewTestPodWithResourceFraction("too-large-pod", ns, 0.05, 1.1)
+	pod := NewTestPod("too-large-pod", ns, WithResourceFraction(0.05, 1.1))
 
 	feature := features.New("Scale Up Pending Pod Too Large").
 		Assess("do not increase cluster size if pending pod is too large", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -160,7 +160,7 @@ func TestScaleUpNoAdditionalScaleUpsDuringProcessing(t *testing.T) {
 	// 3 pods requesting 60% CPU each, so no two pods fit on the same node and exactly 3 nodes are needed
 	var pods []*corev1.Pod
 	for _, name := range []string{"no-extra-scale-up-pod-1", "no-extra-scale-up-pod-2", "no-extra-scale-up-pod-3"} {
-		pods = append(pods, NewTestPodWithResourceFraction(name, ns, 0.60, 0.02))
+		pods = append(pods, NewTestPod(name, ns, WithResourceFraction(0.60, 0.02)))
 	}
 
 	feature := features.New("Scale Up No Additional Scale Ups During Processing").
@@ -213,8 +213,8 @@ func TestScaleUpHostPortConflict(t *testing.T) {
 
 	// Both pods are small enough to share a node, but they bind the same host port,
 	// so each of them needs its own node
-	pod1 := NewTestPodWithHostPort("host-port-pod-1", ns, 8080)
-	pod2 := NewTestPodWithHostPort("host-port-pod-2", ns, 8080)
+	pod1 := NewTestPod("host-port-pod-1", ns, WithHostPort(8080))
+	pod2 := NewTestPod("host-port-pod-2", ns, WithHostPort(8080))
 	pods := []*corev1.Pod{pod1, pod2}
 
 	feature := features.New("Scale Up Host Port Conflict").
@@ -261,9 +261,9 @@ func TestScaleUpPodAntiAffinity(t *testing.T) {
 
 	// All pods are small enough to share a node, but their mutual anti-affinity
 	// allows at most one of them per node
-	existingPod := NewTestPodWithAntiAffinity("anti-affinity-pod", ns, "anti-affinity", "yes")
-	extraPod1 := NewTestPodWithAntiAffinity("anti-affinity-extra-pod-1", ns, "anti-affinity", "yes")
-	extraPod2 := NewTestPodWithAntiAffinity("anti-affinity-extra-pod-2", ns, "anti-affinity", "yes")
+	existingPod := NewTestPod("anti-affinity-pod", ns, WithAntiAffinity("anti-affinity", "yes"))
+	extraPod1 := NewTestPod("anti-affinity-extra-pod-1", ns, WithAntiAffinity("anti-affinity", "yes"))
+	extraPod2 := NewTestPod("anti-affinity-extra-pod-2", ns, WithAntiAffinity("anti-affinity", "yes"))
 	extraPods := []*corev1.Pod{extraPod1, extraPod2}
 
 	feature := features.New("Scale Up Pod Anti Affinity").
@@ -327,8 +327,8 @@ func TestScaleUpEmptyDirVolume(t *testing.T) {
 
 	// The EmptyDir pod is small enough to share a node with the existing pod,
 	// but its anti-affinity forces it onto a new node
-	existingPod := NewTestPodWithAntiAffinity("empty-dir-anti-affinity-pod", ns, "anti-affinity-empty-dir", "yes")
-	emptyDirPod := NewTestPodWithEmptyDirAndAntiAffinity("empty-dir-pod", ns, "anti-affinity-empty-dir", "yes")
+	existingPod := NewTestPod("empty-dir-anti-affinity-pod", ns, WithAntiAffinity("anti-affinity-empty-dir", "yes"))
+	emptyDirPod := NewTestPod("empty-dir-pod", ns, WithAntiAffinity("anti-affinity-empty-dir", "yes"), WithEmptyDir())
 
 	feature := features.New("Scale Up EmptyDir Volume").
 		Assess("increase cluster size if pod requesting EmptyDir volume is pending", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -388,7 +388,7 @@ func TestScaleUpExpendablePodCreated(t *testing.T) {
 	ns := testEnv.EnvConf().Namespace()
 
 	// Pod with expendable priority (below --expendable-pods-priority-cutoff), which CA must ignore
-	pod := NewTestPodWithPriority("expendable-pod", ns, expendablePriorityClassName)
+	pod := NewTestPod("expendable-pod", ns, WithPriorityClass(expendablePriorityClassName))
 
 	feature := features.New("Scale Up When Expendable Pod Is Created").
 		Assess("do not scale up when expendable pod is created", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -432,7 +432,7 @@ func TestScaleUpNonExpendablePodCreated(t *testing.T) {
 	ns := testEnv.EnvConf().Namespace()
 
 	// Pod with non-expendable (high) priority
-	pod := NewTestPodWithPriority("non-expendable-pod", ns, highPriorityClassName)
+	pod := NewTestPod("non-expendable-pod", ns, WithPriorityClass(highPriorityClassName))
 
 	feature := features.New("Scale Up When Non Expendable Pod Is Created").
 		Assess("scale up when non expendable pod is created", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -488,8 +488,7 @@ func TestScaleUpExpendablePodPreempted(t *testing.T) {
 	expendableRS.Spec.Template.Spec.PriorityClassName = expendablePriorityClassName
 
 	// High priority pod (70% CPU) that cannot fit next to the expendable pod, so it preempts it
-	highPriorityPod := NewTestPodWithResourceFraction("preempting-high-priority-pod", ns, 0.70, 0.02)
-	highPriorityPod.Spec.PriorityClassName = highPriorityClassName
+	highPriorityPod := NewTestPod("preempting-high-priority-pod", ns, WithResourceFraction(0.70, 0.02), WithPriorityClass(highPriorityClassName))
 
 	feature := features.New("Scale Up When Expendable Pod Is Preempted").
 		Assess("do not scale up when expendable pod is preempted", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -570,8 +569,8 @@ func TestScaleUpUnprocessedPodUnschedulable(t *testing.T) {
 
 	// 2 pods (70% memory each) using a scheduler that CA bypasses. No scheduler will ever process them,
 	// so CA has to decide on its own that they need 2 new nodes.
-	pod1 := NewTestPodWithScheduler("unprocessed-unschedulable-pod-1", ns, 0.05, 0.70, testCfg.BypassedSchedulerName)
-	pod2 := NewTestPodWithScheduler("unprocessed-unschedulable-pod-2", ns, 0.05, 0.70, testCfg.BypassedSchedulerName)
+	pod1 := NewTestPod("unprocessed-unschedulable-pod-1", ns, WithResourceFraction(0.05, 0.70), WithSchedulerName(testCfg.BypassedSchedulerName))
+	pod2 := NewTestPod("unprocessed-unschedulable-pod-2", ns, WithResourceFraction(0.05, 0.70), WithSchedulerName(testCfg.BypassedSchedulerName))
 	pods := []*corev1.Pod{pod1, pod2}
 
 	feature := features.New("Scale Up When Unprocessed Pod Is Unschedulable").
@@ -616,7 +615,7 @@ func TestScaleUpUnprocessedPodSchedulable(t *testing.T) {
 
 	// Pod (50% memory) using a scheduler that CA bypasses. It fits on the existing node,
 	// so CA must not add a node for it.
-	unprocessedPod := NewTestPodWithScheduler("unprocessed-schedulable-pod", ns, 0.05, 0.50, testCfg.BypassedSchedulerName)
+	unprocessedPod := NewTestPod("unprocessed-schedulable-pod", ns, WithResourceFraction(0.05, 0.50), WithSchedulerName(testCfg.BypassedSchedulerName))
 
 	feature := features.New("Scale Up When Unprocessed Pod Is Schedulable").
 		Assess("do not scale up when unprocessed pod is created and is going to be schedulable", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -671,8 +670,8 @@ func TestScaleUpUnprocessedPodSchedulerNotBypassed(t *testing.T) {
 	// 2 pods (70% memory each) using a scheduler that does not exist and that CA is not configured
 	// to bypass, so CA keeps waiting for a scheduler and must not scale up
 	schedulerName := "non-existent-scheduler-" + ns
-	pod1 := NewTestPodWithScheduler("unprocessed-not-bypassed-pod-1", ns, 0.05, 0.70, schedulerName)
-	pod2 := NewTestPodWithScheduler("unprocessed-not-bypassed-pod-2", ns, 0.05, 0.70, schedulerName)
+	pod1 := NewTestPod("unprocessed-not-bypassed-pod-1", ns, WithResourceFraction(0.05, 0.70), WithSchedulerName(schedulerName))
+	pod2 := NewTestPod("unprocessed-not-bypassed-pod-2", ns, WithResourceFraction(0.05, 0.70), WithSchedulerName(schedulerName))
 	pods := []*corev1.Pod{pod1, pod2}
 
 	feature := features.New("Scale Up When Unprocessed Pod Scheduler Is Not Bypassed").

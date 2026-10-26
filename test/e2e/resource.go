@@ -30,26 +30,14 @@ import (
 	"sigs.k8s.io/e2e-framework/klient"
 )
 
-// NewTestPod creates a baseline test pod requesting 5% of a single node's available CPU
-// and 2% of a single node's available memory (~600m CPU, ~655Mi memory on KWOK).
-func NewTestPod(name, namespace string) *corev1.Pod {
-	return NewTestPodWithResourceFraction(name, namespace, 0.05, 0.02)
-}
+// PodOption customizes a test pod built by NewTestPod.
+type PodOption func(*corev1.Pod)
 
-// NewTestPodWithResourceFraction creates a test pod requesting the specified fractions
-// (0.0 < fraction <= 1.0) of a single node's available CPU (NodeCPU) and memory (NodeMemory).
-func NewTestPodWithResourceFraction(name, namespace string, cpuFraction, memFraction float64) *corev1.Pod {
-	return NewTestPodWithResources(
-		name,
-		namespace,
-		testCfg.CalculateCPURequest(cpuFraction),
-		testCfg.CalculateMemoryRequest(memFraction),
-	)
-}
-
-// NewTestPodWithResources creates a test pod configuration with custom CPU and memory requests.
-func NewTestPodWithResources(name, namespace, cpu, memory string) *corev1.Pod {
-	return &corev1.Pod{
+// NewTestPod creates a test pod targeting the test node group. By default it requests 5% of a
+// single node's available CPU and 2% of its available memory (~600m CPU, ~655Mi memory on KWOK);
+// opts customize it further and are applied in order.
+func NewTestPod(name, namespace string, opts ...PodOption) *corev1.Pod {
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
@@ -63,12 +51,6 @@ func NewTestPodWithResources(name, namespace, cpu, memory string) *corev1.Pod {
 				{
 					Name:  "fake-container",
 					Image: "fake-image",
-					Resources: corev1.ResourceRequirements{
-						Requests: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse(cpu),
-							corev1.ResourceMemory: resource.MustParse(memory),
-						},
-					},
 				},
 			},
 			NodeSelector: map[string]string{
@@ -76,6 +58,112 @@ func NewTestPodWithResources(name, namespace, cpu, memory string) *corev1.Pod {
 			},
 			Tolerations: testCfg.Tolerations,
 		},
+	}
+	WithResourceFraction(0.05, 0.02)(pod)
+	for _, opt := range opts {
+		opt(pod)
+	}
+	return pod
+}
+
+// WithResourceFraction makes the pod request the specified fractions (0.0 < fraction <= 1.0)
+// of a single node's available CPU (NodeCPU) and memory (NodeMemory).
+func WithResourceFraction(cpuFraction, memFraction float64) PodOption {
+	return WithResources(testCfg.CalculateCPURequest(cpuFraction), testCfg.CalculateMemoryRequest(memFraction))
+}
+
+// WithResources makes the pod request the given CPU and memory.
+func WithResources(cpu, memory string) PodOption {
+	return func(pod *corev1.Pod) {
+		pod.Spec.Containers[0].Resources.Requests = corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse(cpu),
+			corev1.ResourceMemory: resource.MustParse(memory),
+		}
+	}
+}
+
+// WithLabel sets the given label on the pod.
+func WithLabel(key, value string) PodOption {
+	return func(pod *corev1.Pod) {
+		pod.Labels[key] = value
+	}
+}
+
+// WithSafeToEvict marks the pod as safe to evict for Cluster Autoscaler.
+func WithSafeToEvict() PodOption {
+	return func(pod *corev1.Pod) {
+		if pod.Annotations == nil {
+			pod.Annotations = map[string]string{}
+		}
+		pod.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"] = "true"
+	}
+}
+
+// WithPriorityClass sets the PriorityClassName of the pod.
+func WithPriorityClass(priorityClassName string) PodOption {
+	return func(pod *corev1.Pod) {
+		pod.Spec.PriorityClassName = priorityClassName
+	}
+}
+
+// WithHostPort makes the pod bind the given host port, so that at most one such pod can run on a node.
+func WithHostPort(hostPort int32) PodOption {
+	return func(pod *corev1.Pod) {
+		pod.Spec.Containers[0].Ports = []corev1.ContainerPort{
+			{
+				ContainerPort: hostPort,
+				HostPort:      hostPort,
+			},
+		}
+	}
+}
+
+// WithAntiAffinity labels the pod labelKey=labelVal and adds required pod anti-affinity to other pods
+// with the same label, so that at most one such pod can run on a node.
+func WithAntiAffinity(labelKey, labelVal string) PodOption {
+	return func(pod *corev1.Pod) {
+		pod.Labels[labelKey] = labelVal
+		pod.Spec.Affinity = &corev1.Affinity{
+			PodAntiAffinity: &corev1.PodAntiAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{
+					{
+						LabelSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{
+								labelKey: labelVal,
+							},
+						},
+						TopologyKey: corev1.LabelHostname,
+					},
+				},
+			},
+		}
+	}
+}
+
+// WithEmptyDir makes the pod mount an EmptyDir volume.
+func WithEmptyDir() PodOption {
+	return func(pod *corev1.Pod) {
+		pod.Spec.Volumes = []corev1.Volume{
+			{
+				Name: "empty-volume",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			},
+		}
+		pod.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{
+			{
+				Name:      "empty-volume",
+				MountPath: "/scratch",
+			},
+		}
+	}
+}
+
+// WithSchedulerName makes the pod be scheduled by the given scheduler.
+func WithSchedulerName(schedulerName string) PodOption {
+	return func(pod *corev1.Pod) {
+		pod.Spec.SchedulerName = schedulerName
 	}
 }
 
@@ -169,13 +257,6 @@ func DeletePriorityClasses(ctx context.Context, client klient.Client) {
 	}
 }
 
-// NewTestPodWithPriority creates a baseline test pod configuration with a specific PriorityClassName.
-func NewTestPodWithPriority(name, namespace, priorityClassName string) *corev1.Pod {
-	pod := NewTestPod(name, namespace)
-	pod.Spec.PriorityClassName = priorityClassName
-	return pod
-}
-
 // NewTestReplicaSet creates a test ReplicaSet requesting the specified CPU and memory fractions
 // per replica with the safe-to-evict annotation.
 func NewTestReplicaSet(name, namespace string, replicas int32, cpuFraction, memFraction float64, labelKey, labelVal string) *appsv1.ReplicaSet {
@@ -240,68 +321,4 @@ func DeletePodsWithLabel(ctx context.Context, client klient.Client, namespace, l
 		}
 	}
 	return nil
-}
-
-// NewTestPodWithHostPort creates a baseline test pod that binds the given host port,
-// so that at most one such pod can run on a node.
-func NewTestPodWithHostPort(name, namespace string, hostPort int32) *corev1.Pod {
-	pod := NewTestPod(name, namespace)
-	pod.Spec.Containers[0].Ports = []corev1.ContainerPort{
-		{
-			ContainerPort: hostPort,
-			HostPort:      hostPort,
-		},
-	}
-	return pod
-}
-
-// NewTestPodWithAntiAffinity creates a baseline test pod labeled labelKey=labelVal with required
-// pod anti-affinity to other pods with the same label, so that at most one such pod can run on a node.
-func NewTestPodWithAntiAffinity(name, namespace, labelKey, labelVal string) *corev1.Pod {
-	pod := NewTestPod(name, namespace)
-	pod.Labels[labelKey] = labelVal
-	pod.Spec.Affinity = &corev1.Affinity{
-		PodAntiAffinity: &corev1.PodAntiAffinity{
-			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{
-				{
-					LabelSelector: &metav1.LabelSelector{
-						MatchLabels: map[string]string{
-							labelKey: labelVal,
-						},
-					},
-					TopologyKey: corev1.LabelHostname,
-				},
-			},
-		},
-	}
-	return pod
-}
-
-// NewTestPodWithEmptyDirAndAntiAffinity creates a test pod like NewTestPodWithAntiAffinity
-// that additionally mounts an EmptyDir volume.
-func NewTestPodWithEmptyDirAndAntiAffinity(name, namespace, labelKey, labelVal string) *corev1.Pod {
-	pod := NewTestPodWithAntiAffinity(name, namespace, labelKey, labelVal)
-	pod.Spec.Volumes = []corev1.Volume{
-		{
-			Name: "empty-volume",
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{},
-			},
-		},
-	}
-	pod.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{
-		{
-			Name:      "empty-volume",
-			MountPath: "/scratch",
-		},
-	}
-	return pod
-}
-
-// NewTestPodWithScheduler creates a test pod requesting the specified fractions of a single node's
-// available CPU and memory that is meant to be scheduled by the given scheduler.
-func NewTestPodWithScheduler(name, namespace string, cpuFraction, memFraction float64, schedulerName string) *corev1.Pod {
-	pod := NewTestPodWithResourceFraction(name, namespace, cpuFraction, memFraction)
-	pod.Spec.SchedulerName = schedulerName
-	return pod
 }

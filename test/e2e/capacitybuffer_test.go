@@ -60,7 +60,7 @@ func TestCapacityBufferScaleUp(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Labels: map[string]string{"app": "buffer-pod"},
 			},
-			Spec: NewTestPodWithResources("buffer-pod", ns, "5000m", "500Mi").Spec,
+			Spec: NewTestPod("buffer-pod", ns, WithResources("5000m", "500Mi")).Spec,
 		},
 	}
 

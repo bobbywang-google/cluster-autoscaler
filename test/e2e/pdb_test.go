@@ -38,19 +38,11 @@ func TestScaleDownReschedulingPodAllowedByPDB(t *testing.T) {
 	// - pdbPod1 (10% CPU) + fillerPod (80% CPU) = 90% CPU (fits on 1st node, leaving 10% free).
 	// - pdbPod2 (20% CPU) cannot fit on the 1st node (90% + 20% = 110% > 100%), forcing a 2nd node.
 	// - Once fillerPod is deleted, pdbPod1 (10%) + pdbPod2 (20%) = 30% CPU (both fit on 1 node).
-	pdbPod1 := NewTestPodWithResourceFraction("pdb-pod-1", ns, 0.10, 0.02)
-	pdbPod1.Labels["app"] = "pdb-test"
-	pdbPod1.Annotations = map[string]string{
-		"cluster-autoscaler.kubernetes.io/safe-to-evict": "true",
-	}
+	pdbPod1 := NewTestPod("pdb-pod-1", ns, WithResourceFraction(0.10, 0.02), WithLabel("app", "pdb-test"), WithSafeToEvict())
 
-	pdbPod2 := NewTestPodWithResourceFraction("pdb-pod-2", ns, 0.20, 0.02)
-	pdbPod2.Labels["app"] = "pdb-test"
-	pdbPod2.Annotations = map[string]string{
-		"cluster-autoscaler.kubernetes.io/safe-to-evict": "true",
-	}
+	pdbPod2 := NewTestPod("pdb-pod-2", ns, WithResourceFraction(0.20, 0.02), WithLabel("app", "pdb-test"), WithSafeToEvict())
 
-	fillerPod := NewTestPodWithResourceFraction("filler-pod", ns, 0.80, 0.02)
+	fillerPod := NewTestPod("filler-pod", ns, WithResourceFraction(0.80, 0.02))
 
 	minAvailable := intstr.FromInt(1)
 	pdb := &policyv1.PodDisruptionBudget{
@@ -151,19 +143,11 @@ func TestScaleDownReschedulingPodPreventedByPDB(t *testing.T) {
 	// - pdbPod1 (10% CPU) + fillerPod (80% CPU) = 90% CPU on the 1st node.
 	// - pdbPod2 (20% CPU) cannot fit on the 1st node, forcing a 2nd node.
 	// - After fillerPod is deleted, both pods could fit on 1 node, but PDB minAvailable=2 blocks drain.
-	pdbPod1 := NewTestPodWithResourceFraction("pdb-prev-pod-1", ns, 0.10, 0.02)
-	pdbPod1.Labels["app"] = "pdb-prev-test"
-	pdbPod1.Annotations = map[string]string{
-		"cluster-autoscaler.kubernetes.io/safe-to-evict": "true",
-	}
+	pdbPod1 := NewTestPod("pdb-prev-pod-1", ns, WithResourceFraction(0.10, 0.02), WithLabel("app", "pdb-prev-test"), WithSafeToEvict())
 
-	pdbPod2 := NewTestPodWithResourceFraction("pdb-prev-pod-2", ns, 0.20, 0.02)
-	pdbPod2.Labels["app"] = "pdb-prev-test"
-	pdbPod2.Annotations = map[string]string{
-		"cluster-autoscaler.kubernetes.io/safe-to-evict": "true",
-	}
+	pdbPod2 := NewTestPod("pdb-prev-pod-2", ns, WithResourceFraction(0.20, 0.02), WithLabel("app", "pdb-prev-test"), WithSafeToEvict())
 
-	fillerPod := NewTestPodWithResourceFraction("pdb-prev-filler-pod", ns, 0.80, 0.02)
+	fillerPod := NewTestPod("pdb-prev-filler-pod", ns, WithResourceFraction(0.80, 0.02))
 
 	minAvailable := intstr.FromInt(2)
 	pdb := &policyv1.PodDisruptionBudget{
@@ -267,11 +251,11 @@ func TestScaleDownDrainingMultiplePodsOneByOnePDB(t *testing.T) {
 	// anchorPod keeps node 1 unremovable for the whole test: it is a bare pod (no controller and no
 	// safe-to-evict annotation), so CA cannot remove node 1 and has to drain node 2 instead of
 	// deleting an empty node.
-	anchorPod := NewTestPodWithResourceFraction("pdb-multidrain-anchor", ns, 0.10, 0.02)
+	anchorPod := NewTestPod("pdb-multidrain-anchor", ns, WithResourceFraction(0.10, 0.02))
 
 	// anchorPod (10% CPU) + fillerPod (80% CPU) leave only 10% CPU free on node 1,
 	// forcing both RS pods (20% CPU each) onto node 2.
-	fillerPod := NewTestPodWithResourceFraction("pdb-multidrain-filler", ns, 0.80, 0.02)
+	fillerPod := NewTestPod("pdb-multidrain-filler", ns, WithResourceFraction(0.80, 0.02))
 
 	// minAvailable: 1 out of 2 pods means at most 1 disruption is allowed at a time.
 	minAvailable := intstr.FromInt(1)
@@ -396,18 +380,14 @@ func TestScaleDownDrainingSystemPodsWithPDB(t *testing.T) {
 	systemNs := "kube-system"
 
 	// Companion pod in test namespace (10% CPU)
-	companionPod := NewTestPodWithResourceFraction("system-pdb-companion-pod", testNs, 0.10, 0.02)
+	companionPod := NewTestPod("system-pdb-companion-pod", testNs, WithResourceFraction(0.10, 0.02))
 
 	// System pod placed in kube-system namespace (20% CPU)
-	systemPod := NewTestPodWithResourceFraction("system-pdb-pod", systemNs, 0.20, 0.02)
-	systemPod.Labels["app"] = "system-pdb-test"
-	systemPod.Annotations = map[string]string{
-		"cluster-autoscaler.kubernetes.io/safe-to-evict": "true",
-	}
+	systemPod := NewTestPod("system-pdb-pod", systemNs, WithResourceFraction(0.20, 0.02), WithLabel("app", "system-pdb-test"), WithSafeToEvict())
 
 	// Filler pod in test namespace consumes 80% CPU on the first node (leaving 10% CPU free)
 	// forcing systemPod (20% CPU) onto a second node.
-	fillerPod := NewTestPodWithResourceFraction("system-pdb-filler-pod", testNs, 0.80, 0.02)
+	fillerPod := NewTestPod("system-pdb-filler-pod", testNs, WithResourceFraction(0.80, 0.02))
 
 	minAvailable := intstr.FromInt(0)
 	pdb := &policyv1.PodDisruptionBudget{
